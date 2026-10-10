@@ -28,6 +28,7 @@ Each plugin here is a Claude Code mod. A mod is one TypeScript hooks module (`ho
 | --- | --- | --- |
 | [**cache-weather**](plugins/cache-weather) | A weather report for the prompt cache, a gauge for the context window and the time the cache has left, in one row under the prompt. | Stefan Engert |
 | [**savvy-progress**](plugins/savvy-progress) | A progress bar above the prompt and a live panel of every subagent. | [johnnyvizz](https://github.com/johnnyvizz) |
+| [**session-watch**](plugins/session-watch) | Speaks up when the session or a subagent runs against a wall, with a sidebar on this session's agents, cache growth and tools. | Stefan Engert |
 
 ## cache-weather
 
@@ -70,6 +71,33 @@ savvy-progress puts a checklist above the prompt as soon as something reports a 
 
 It was made for johnnyvizz's [savvy-flow](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow) skill, which drives the bar on its own. That skill is not part of this repository. Without it the panel still tracks every subagent, and a session can call the `progress` tool itself. This README was written that way, with the list ticking off its three steps.
 
+## session-watch
+
+session-watch stays quiet while a session runs normally. Its figures ride dim at the end of the hint line. When the main thread or a subagent runs against a wall, a row above the hint line names it, yellow or red, and a red one raises a toast once:
+
+```
+⚠ "fix tests" looping on Bash · ⚠ "map the repo" quiet 11m · 3 agents
+```
+
+What it looks for:
+
+- **Stalls and hangs:** a thread quiet for 5 minutes, or a tool still running after 15.
+- **Hard stops:** a response stopped at the output limit or the context window.
+- **Loops:** the same call 3 times in the last 10.
+- **Error storms:** more than 20% failed calls in the last 10.
+- **Context trouble:** stuck at the ceiling, creeping toward it, or growing back after a compaction.
+- **The plan window:** projected to run out before it resets.
+
+`/session-watch` opens a sidebar about the current session, drawn with tokenol-style stacked bars (`█` cache read, `▓` written, `░` uncached):
+
+- every agent with its context bar and a diagnosis in words, for example "cold start: wrote a 20k prefix, 91% of its cost" or "too small to delegate";
+- cache growth request by request;
+- calls, failures and time for each tool;
+- request times;
+- a log of what tripped.
+
+The signals borrow ideas from [ccusage](https://github.com/ryoppippi/ccusage) and [tokenol](https://github.com/farhanferoz/tokenol). `replay/replay.py` runs the same detectors over your past transcripts. Details are in [its README](plugins/session-watch/README.md).
+
 ## Install
 
 Add this folder as a marketplace once, then install the plugins you want:
@@ -78,6 +106,7 @@ Add this folder as a marketplace once, then install the plugins you want:
 claude plugin marketplace add ~/Developer/claude/claude-plugins
 claude plugin install cache-weather@stefan-claude-plugins
 claude plugin install savvy-progress@stefan-claude-plugins
+claude plugin install session-watch@stefan-claude-plugins
 ```
 
 A plugin installed from a folder marketplace is read from that folder, not from a copy. After an edit here, `/reload-plugins` in a running session loads the change.
@@ -115,3 +144,5 @@ This copy differs from upstream in these ways, and its version, `1.2.0+stefan.1`
 `hooks/checklist.test.tsx` is new and tests the checklist and the `svg` option. Every other file matches upstream.
 
 **cache-weather** is by Stefan Engert, under the MIT license in [`LICENSE`](LICENSE).
+
+**session-watch** is by Stefan Engert, under the MIT license in [`plugins/session-watch/LICENSE`](plugins/session-watch/LICENSE). Its signals take ideas, not code, from [ccusage](https://github.com/ryoppippi/ccusage) by ryoppippi and [tokenol](https://github.com/farhanferoz/tokenol) by farhanferoz, both MIT-licensed.

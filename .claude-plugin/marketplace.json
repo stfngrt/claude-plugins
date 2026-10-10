@@ -28,6 +28,16 @@
       },
       "homepage": "https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress",
       "license": "MIT"
+    },
+    {
+      "name": "session-watch",
+      "source": "./plugins/session-watch",
+      "description": "Mod: watches the session and every subagent for stalls, loops, error storms and the context ceiling; quiet under the prompt until something drifts, with a /session-watch sidebar of agents, diagnosis, cache growth and tools.",
+      "category": "mod",
+      "author": {
+        "name": "Stefan Engert"
+      },
+      "license": "MIT"
     }
   ]
 }

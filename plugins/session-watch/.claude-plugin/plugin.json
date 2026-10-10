@@ -1,0 +1,10 @@
+{
+  "name": "session-watch",
+  "version": "0.2.0",
+  "description": "Watches a session, subagents included, for the moment it runs against a wall: stalls, loops, error storms, the context ceiling. Quiet under the prompt while all is normal; /session-watch opens a sidebar of agents with a diagnosis, cache growth per request, tools and timing.",
+  "author": {
+    "name": "Stefan Engert"
+  },
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}

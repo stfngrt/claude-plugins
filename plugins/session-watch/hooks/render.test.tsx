@@ -1,0 +1,101 @@
+import type { AgentSpawnInput, On } from 'claude-code'
+import { expect, mock, test } from 'claude-code/testing'
+
+const USAGE = { model: 'claude-opus-5-5', input_tokens: 10, output_tokens: 400, cache_read_input_tokens: 48_000, cache_creation_input_tokens: 2_000 }
+const PROPS = { isDraft: false, isWorking: false, hint: '? for shortcuts' }
+
+// The engine beneath the plugin: each event answers as a session would.
+const engine = (on: On) => {
+  on('ui.render', { component: 'PromptHint' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return (
+      <Text>
+        {e.props.hint}
+        {e.props.tail ? ` | ${e.props.tail}` : ''}
+      </Text>
+    )
+  })
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: USAGE }
+  })
+  on('turn.complete', ($, e) => ({ text: e.answer, usage: e.usage }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('agent.spawn', () => ({ model: 'claude-opus-5-5', agentId: 'a1' }))
+}
+
+// The Agent tool call that starts the subagent.
+const SPAWN: AgentSpawnInput = {
+  tool_use_id: 'toolu_1',
+  prompt: 'map it',
+  description: 'map the repo',
+  subagentType: 'Explore',
+  provider: { plugin: 'engine', tier: 'core' },
+  parentModel: 'claude-opus-5-5',
+  background: false,
+  fork: false,
+}
+
+const drain = async (stream: AsyncIterable<unknown>) => {
+  for await (const _ of stream) {
+  }
+}
+
+for (const surface of ['terminal', 'desktop'] as const) {
+  test(`${surface}: quiet while normal, a cause row once a subagent stalls`, async ($, on) => {
+    const clock = mock.clock(on, { now: 1_000_000 })
+    mock.store(on)
+    engine(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await $.agent.spawn(SPAWN)
+    await drain($.turn.step({ turnId: 't1', index: 0, model: 'claude-opus-5-5', messageCount: 1 }))
+    await drain($.turn.step({ turnId: 's1', index: 0, model: 'claude-opus-5-5', messageCount: 1, agentId: 'a1' }))
+    await $.session.measure({ context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [], cost: { usd: 1.23 }, changed: ['cost'] })
+
+    const ui = await $.ui.mount({ plugin: 'session-watch', surface, component: 'PromptHint', props: PROPS })
+    let drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('1/1 agents running')
+    expect(drawn).not.toContain('$')
+    expect(drawn).not.toContain('⚠')
+
+    // Eleven quiet minutes inside the subagent: red, named, and toasted.
+    await clock.advance(11 * 60_000)
+    drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('⚠ \\"map the repo\\" quiet 11m')
+    expect(drawn).toContain('"error"')
+    expect(drawn).toContain('? for shortcuts')
+  })
+
+  test(`${surface}: the sidebar draws the agents, cache growth bars, tools and diagnosis`, async ($, on) => {
+    mock.clock(on, { now: 1_000_000 })
+    mock.store(on)
+    engine(on)
+    await $.session.start({ cwd: '/', surface, isInteractive: true })
+    await $.agent.spawn(SPAWN)
+    for (let i = 0; i < 3; i++) await drain($.turn.step({ turnId: 't1', index: i, model: 'claude-opus-5-5', messageCount: 1 }))
+    await drain($.turn.step({ turnId: 's1', index: 0, model: 'claude-opus-5-5', messageCount: 1, agentId: 'a1' }))
+    await $.turn.complete({ turnId: 's1', agentId: 'a1', answer: 'done', durationMs: 10, reason: 'answer', isAborted: false, usage: USAGE })
+
+    const ui = await $.ui.mount({
+      plugin: 'session-watch',
+      surface,
+      component: 'Pane',
+      requestId: 'session-watch',
+      props: { title: 'Session watch', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+    })
+    const drawn = JSON.stringify(await ui.drawn())
+    for (const part of ['Agents', 'main thread', 'map the repo', 'Explore', 'Cache growth per request', '#3', 'Tools', 'Context and requests', 'cache read']) {
+      expect(drawn).toContain(part)
+    }
+    expect(drawn).toContain('✓')
+  })
+
+  test(`${surface}: nothing is drawn before the first request`, async ($, on) => {
+    mock.clock(on)
+    engine(on)
+    const ui = await $.ui.mount({ plugin: 'session-watch', surface, component: 'PromptHint', props: PROPS })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('? for shortcuts')
+    expect(drawn).not.toContain('$')
+  })
+}
