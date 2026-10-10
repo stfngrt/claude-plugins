@@ -1,7 +1,21 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { Segment } from './register'
-import { add, bar, describe, describeContext, describeTtl, hitRate, toTally, tokensText, ttlFromTranscript, weatherFor } from './register'
+import {
+  add,
+  bar,
+  cellWidth,
+  describe,
+  describeContext,
+  describeTtl,
+  fitRow,
+  hitRate,
+  rateColor,
+  toTally,
+  tokensText,
+  ttlFromTranscript,
+  weatherFor,
+} from './register'
 
 const text = (segments: Segment[]) => segments.map(one => one.text).join('')
 
@@ -78,6 +92,44 @@ test('the TTL comes from the newest main-thread response that wrote the cache', 
 
   expect(ttlFromTranscript(transcript)).toBe('1h')
   expect(ttlFromTranscript(line('none'))).toBe(null)
+})
+
+test('a response that wrote both lifetimes counts down from the shorter one', () => {
+  const mixed = JSON.stringify({
+    type: 'assistant',
+    message: { usage: { cache_creation: { ephemeral_1h_input_tokens: 9000, ephemeral_5m_input_tokens: 40 } } },
+  })
+
+  expect(ttlFromTranscript(mixed)).toBe('5m')
+})
+
+test('the bar colour follows the same bands as the sky', () => {
+  expect([0.85, 0.65, 0.45, 0.25, 0.05].map(rate => [weatherFor(rate).icon, rateColor(rate)])).toEqual([
+    ['☀️', 'success'],
+    ['🌤️', 'success'],
+    ['☁️', 'warning'],
+    ['🌦️', 'error'],
+    ['🌧️', 'error'],
+  ])
+})
+
+test('the row drops detail until it fits the width', () => {
+  const turn = { read: 98, written: 1, uncached: 1 }
+  const fill = { tokens: 120_000, window: 1_000_000 }
+  const ttlSegments = [{ text: 'ttl 1h · ' }, { text: '54m left' }]
+  const row = (columns?: number) =>
+    text(fitRow(detail => describe(turn, turn, fill, ttlSegments, detail), columns) ?? [])
+
+  expect(row()).toBe('☀️ cache █████████▊ 98% · session 98%   ctx █▎░░░░░░░░ 12% · 120k / 1M   ttl 1h · 54m left')
+  expect(row(80)).toBe('☀️ cache █████████▊ 98% · session 98%   ctx █▎░░░░░░░░ 12%   ttl 1h · 54m left')
+  expect(row(70)).toBe('☀️ cache █████████▊ 98%   ctx █▎░░░░░░░░ 12%   ttl 1h · 54m left')
+  expect(row(40)).toBe('☀️ 98%   ctx 12%   54m left')
+  expect(row(10)).toBe('☀️ 98%   ctx 12%   54m left')
+})
+
+test('emoji take two cells', () => {
+  expect(cellWidth('☀️ a')).toBe(4)
+  expect(cellWidth('🌤️')).toBe(2)
 })
 
 test('the TTL closes the row', () => {

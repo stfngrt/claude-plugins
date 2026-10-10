@@ -11,14 +11,16 @@
       "name": "cache-weather",
       "source": "./plugins/cache-weather",
       "description": "Mod: the prompt cache hit rate as weather, the context window fill as a bar, and the time left on the cache, under the prompt.",
-      "version": "0.6.0",
-      "category": "mod"
+      "category": "mod",
+      "author": {
+        "name": "Stefan Engert"
+      },
+      "license": "MIT"
     },
     {
       "name": "savvy-progress",
       "source": "./plugins/savvy-progress",
       "description": "Mod by johnnyvizz: a progress bar above the prompt and a live agents panel. This copy draws text on the desktop by default.",
-      "version": "1.2.0",
       "category": "mod",
       "author": {
         "name": "johnnyvizz",

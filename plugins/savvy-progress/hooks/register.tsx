@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { AgentSpawnInput, AgentSpawnResult, EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, Flow, Panel, Phase, PlannedTask } from '../types'
 
@@ -634,6 +634,15 @@ const checklistOf = (f: Flow, list: AgentRun[]): { n: number; title: string; sta
 const CHECK_GLYPH: Record<CheckState, string> = { done: '☑', running: '◐', todo: '☐' }
 
 // Opens the agents pane, or closes it when it is up; true when it ends up open.
+// Runs bookkeeping that must never fail the event it watches.
+async function quietly(work: () => Promise<unknown>): Promise<void> {
+  try {
+    await work()
+  } catch {
+    // The panel misses one update; the subagent runs as usual.
+  }
+}
+
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
   if (isOpen) {
@@ -651,6 +660,35 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
   if (p.autoOpenedFor === key) return
   await update($, panel, prev => ({ ...prev, autoOpenedFor: key }))
   void $.ui.open({ id: PANE, title: tr().pane })
+}
+
+// Records a started subagent for the panel, and opens the panel for a savvy worker.
+async function trackSpawn($: EngineInterface, e: AgentSpawnInput, started: AgentSpawnResult): Promise<void> {
+  const at = await $.clock.now()
+  await update($, agents, list => {
+    const round = 1 + list.filter(a => norm(a.description) === norm(e.description) && e.description).length
+    const run: AgentRun = {
+      id: started.agentId ?? e.tool_use_id,
+      agentId: started.agentId,
+      type: e.subagentType,
+      description: e.description,
+      model: started.model,
+      status: 'running',
+      startedAt: at,
+      contextTokens: 0,
+      contextMax: windowOf(started.model),
+      tokens: 0,
+      costUsd: 0,
+      steps: 0,
+      round,
+    }
+    return [...list.filter(a => a.id !== run.id), run].slice(-200)
+  })
+  await update($, now, () => at)
+  if (e.subagentType.startsWith('savvy-')) {
+    const f = await read($, flow)
+    await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -758,18 +796,22 @@ export const register: Register = (on, options) => {
   })
 
   // Safety net: worker launches move the faint layer even if the orchestrator forgets to report.
+  // The bookkeeping goes through quietly: a failure there must not fail the Agent call,
+  // and a .catch that called next again would launch the subagent a second time.
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const type = String(e.subagent_type ?? '')
     if (!type.startsWith('savvy-')) return next(e)
 
-    await update($, flow, prev => {
-      const base = prev && !prev.isFinished ? { ...blank(), ...prev } : blank()
-      return { ...base, running: base.running + 1, phase: base.phase === 'plan' ? 'delegate' : base.phase }
-    })
+    await quietly(() =>
+      update($, flow, prev => {
+        const base = prev && !prev.isFinished ? { ...blank(), ...prev } : blank()
+        return { ...base, running: base.running + 1, phase: base.phase === 'plan' ? 'delegate' : base.phase }
+      }),
+    )
     try {
       return await next(e)
     } finally {
-      await update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev))
+      await quietly(() => update($, flow, prev => (prev ? { ...prev, running: Math.max(0, prev.running - 1) } : prev)))
     }
   })
 
@@ -777,31 +819,7 @@ export const register: Register = (on, options) => {
     const started = await next(e)
     if (started.deny !== undefined) return started
 
-    const at = await $.clock.now()
-    await update($, agents, list => {
-      const round = 1 + list.filter(a => norm(a.description) === norm(e.description) && e.description).length
-      const run: AgentRun = {
-        id: started.agentId ?? e.tool_use_id,
-        agentId: started.agentId,
-        type: e.subagentType,
-        description: e.description,
-        model: started.model,
-        status: 'running',
-        startedAt: at,
-        contextTokens: 0,
-        contextMax: windowOf(started.model),
-        tokens: 0,
-        costUsd: 0,
-        steps: 0,
-        round,
-      }
-      return [...list.filter(a => a.id !== run.id), run].slice(-200)
-    })
-    await update($, now, () => at)
-    if (e.subagentType.startsWith('savvy-')) {
-      const f = await read($, flow)
-      await autoOpen($, f && !f.isFinished ? f.title : 'savvy-flow')
-    }
+    await quietly(() => trackSpawn($, e, started))
     return started
   })
 

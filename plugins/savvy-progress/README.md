@@ -1,6 +1,6 @@
 # savvy-progress
 
-A Claude Code mod: a progress bar above the prompt and a live panel of subagents. Made for the [savvy-flow](../savvy-flow) skill, and useful with any subagents.
+A Claude Code mod: a progress bar above the prompt and a live panel of subagents. Made for the [savvy-flow](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow) skill, and useful with any subagents.
 
 - **Progress bar**: the flow's title, phase, accepted tasks out of planned, and a button with the crew size that opens the panel. It appears once something reports progress (savvy-flow does) or a `savvy-*` worker starts.
 - **Agents panel** (`/agents-info` toggles it): running, finished and planned subagents with model, effort, task progress, context, estimated cost and time. Working crabs walk, and each savvy tier animates its prop: the astronaut floats, the detective sweeps the magnifier, the engineer turns the wrench, the chef tosses the omelette, the racer runs with a fluttering flag. `prefers-reduced-motion` stops them.
@@ -14,10 +14,12 @@ Cost is a rough estimate from token counts and a built-in per-model price table 
 
 ## Settings
 
+`svg`: `false` (default) draws the bar and the panel as text on every surface. `true` draws them as SVG pictures in the desktop app, which some versions show as an empty box.
+
 `language`: `auto` (default), `en` or `ru`. `auto` follows Claude Code's `language` setting, then the system locale, and falls back to English. Set it in `/config`, or, for a mod loaded by hand, in `~/.claude/settings.json`:
 
 ```json
 { "pluginConfigs": { "savvy-progress": { "options": { "language": "ru" } } } }
 ```
 
-Install instructions are in the [repository README](../../README.md).
+Install instructions are in the [repository README](../../README.md). This copy differs from upstream; the repository README lists how.

@@ -6,8 +6,7 @@
 
 ![Claude Code mods](https://img.shields.io/badge/Claude_Code-mods-D97757?style=for-the-badge)
 ![Function hooks](https://img.shields.io/badge/built_on-function_hooks-8f8cf4?style=for-the-badge)
-![Plugins](https://img.shields.io/badge/plugins-2-5fbf8f?style=for-the-badge)
-![License of savvy-progress](https://img.shields.io/badge/savvy--progress-MIT-888780?style=for-the-badge)
+![License](https://img.shields.io/badge/license-MIT-888780?style=for-the-badge)
 
 ```
 ●  Flashy README  Review 2/3  ×3  ✕
@@ -48,7 +47,9 @@ The prompt cache decides how much of each request Claude Code pays for in full. 
 | 20% to 39% | 🌦️ | The cache missed more than it hit. |
 | Below 20% | 🌧️ | Cold cache. The first turn of a session always looks like this. |
 
-The cache bar is green, yellow or red by hit rate. The ctx bar runs the other way, because a full window is the bad case, so it turns yellow at 50% and red at 80%. The ttl text is the cache lifetime the last cache write used, `5m` or `1h`, read from the session transcript. It counts down from the end of the last turn and turns red at `expired`, the point where the next prompt writes the whole cache again. Subagent turns are left out of all of it, because a subagent builds a cache of its own.
+The cache bar's colour follows the sky: green for ☀️ and 🌤️, yellow for ☁️, red for 🌦️ and 🌧️. The ctx bar runs the other way, because a full window is the bad case, so it turns yellow at 50% and red at 80%. The ttl text is the cache lifetime the last cache write used, `5m` or `1h`, read from the session transcript; when a response wrote with both, it shows the shorter. It counts down from the end of the last turn and turns red at `expired`, the point where the next prompt writes the cache again. Subagent turns are left out of all of it, because a subagent builds a cache of its own.
+
+In a narrow terminal the row drops the token counts, then the session rate, then the bars, so it stays on one line. After `/clear` or a resume it starts over with the new conversation.
 
 ## savvy-progress
 
@@ -100,13 +101,15 @@ Claude Code writes the API's type declarations into `plugins/<name>/.claude-plug
 
 ## Credits and licenses
 
-**savvy-progress** is by [johnnyvizz](https://github.com/johnnyvizz), copied from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress) at commit `272a877f39b6971690e087b16a7cc3951b811e39` under the MIT license. Its copyright notice and license are in `plugins/savvy-progress/LICENSE`. The pixel crabs in its panel are, as its source says, Pixel Clawd from DockCrab (Clawdy). Its own README links to savvy-flow and to the claude-kit README with relative paths, so those two links only work on GitHub.
+**savvy-progress** is by [johnnyvizz](https://github.com/johnnyvizz), copied from [johnnyvizz/claude-kit](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress) at commit `272a877f39b6971690e087b16a7cc3951b811e39` under the MIT license. Its copyright notice and license are in `plugins/savvy-progress/LICENSE`. The pixel crabs in its panel are, as its source says, Pixel Clawd from DockCrab (Clawdy).
 
-This copy has two changes from upstream, both in `hooks/register.tsx`:
+This copy differs from upstream in these ways, and its version, `1.2.0+stefan.1`, says it is not upstream's `1.2.0`:
 
 1. The Claude Code desktop app drew the bar's SVG picture as an empty box, so only the two buttons showed. The text drawing the terminal uses is now the default on every surface. A new `svg` option in `.claude-plugin/plugin.json` brings the SVG pictures back (`/plugin configure savvy-progress@stefan-claude-plugins`).
-2. A plan with tasks is drawn as a checklist instead of a progress bar. `hooks/checklist.test.tsx` is new and tests it.
+2. A plan with tasks is drawn as a checklist instead of a progress bar.
+3. The bookkeeping in the `Agent` tool and `agent.spawn` hooks can no longer fail a subagent launch. A failure there now only costs the panel one update.
+4. Its README links to savvy-flow on GitHub and documents the `svg` option.
 
-Every other file matches upstream.
+`hooks/checklist.test.tsx` is new and tests the checklist and the `svg` option. Every other file matches upstream.
 
-**cache-weather** is by Stefan Engert.
+**cache-weather** is by Stefan Engert, under the MIT license in [`LICENSE`](LICENSE).

@@ -28,3 +28,23 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(drawn).not.toContain('░')
   })
 }
+
+const BAR = { title: 'Flashy README', phase: 'delegate', total: 3, done: 1 }
+
+const drawBar = async ($: Parameters<Parameters<typeof test>[1]>[0], on: Parameters<Parameters<typeof test>[1]>[1]) => {
+  mock.clock(on)
+  on('tool.call', ($, e) => ({ result: String(e.tool) }))
+  await $.tool.call({ tool: 'mcp__savvy-progress__progress', tool_use_id: 'p1', ...BAR } as never)
+
+  const ui = await $.ui.mount({ plugin: 'savvy-progress', surface: 'desktop', component: 'AbovePrompt', props: { hasSurvey: false, bodyColumns: 100 } as never })
+
+  return JSON.stringify(await ui.drawn())
+}
+
+test('desktop: the bar is text by default', async ($, on) => {
+  expect(await drawBar($, on)).not.toContain('"Svg"')
+})
+
+test('desktop: the svg option brings the picture back', { options: { svg: true } }, async ($, on) => {
+  expect(await drawBar($, on)).toContain('"Svg"')
+})

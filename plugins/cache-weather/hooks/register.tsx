@@ -68,22 +68,31 @@ export const tokensText = (n: number): string =>
 // A run of text and the theme color it is drawn in; no color means dim.
 export type Segment = { text: string; color?: 'success' | 'warning' | 'error' }
 
-// A high hit rate is good, so it is green.
+// A high hit rate is good, so it is green: sun and sun behind cloud are green,
+// cloud is yellow, and showers and rain are red, so the bar and the sky agree.
 export const rateColor = (rate: number): Segment['color'] =>
-  rate >= 0.8 ? 'success' : rate >= 0.5 ? 'warning' : 'error'
+  rate >= 0.6 ? 'success' : rate >= 0.4 ? 'warning' : 'error'
 
 // A full context window is bad, so the colors run the other way.
 export const fillColor = (share: number): Segment['color'] =>
   share < 0.5 ? 'success' : share < 0.8 ? 'warning' : 'error'
 
-export const describeContext = (fill: ContextFill): Segment[] => {
+// How much of the row to draw: everything, then without token counts, then
+// without the session rate, then without bars, so the row fits narrow terminals.
+export const DETAILS = ['full', 'short', 'shorter', 'bare'] as const
+
+export type Detail = (typeof DETAILS)[number]
+
+export const describeContext = (fill: ContextFill, detail: Detail = 'full'): Segment[] => {
   const share = fill.window === 0 ? 0 : fill.tokens / fill.window
 
-  return [
-    { text: 'ctx ' },
-    { text: bar(share), color: fillColor(share) },
-    { text: ` ${percent(share)} · ${tokensText(fill.tokens)} / ${tokensText(fill.window)}` },
-  ]
+  if (detail === 'bare') {
+    return [{ text: 'ctx ' }, { text: percent(share), color: fillColor(share) }]
+  }
+
+  const counts = detail === 'full' ? ` · ${tokensText(fill.tokens)} / ${tokensText(fill.window)}` : ''
+
+  return [{ text: 'ctx ' }, { text: bar(share), color: fillColor(share) }, { text: ` ${percent(share)}${counts}` }]
 }
 
 export const minutesText = (ms: number): string => {
@@ -112,6 +121,7 @@ export const describe = (
   total: CacheTally,
   fill: ContextFill | null,
   ttlSegments: Segment[] = [],
+  detail: Detail = 'full',
 ): Segment[] | undefined => {
   const turnRate = turn === null ? null : hitRate(turn)
 
@@ -120,15 +130,50 @@ export const describe = (
   }
 
   const totalRate = hitRate(total)
-  const sessionText = totalRate === null ? '' : ` · session ${percent(totalRate)}`
+  const hasSession = totalRate !== null && (detail === 'full' || detail === 'short')
+  const sessionText = hasSession ? ` · session ${percent(totalRate)}` : ''
+  const icon = weatherFor(turnRate).icon
+  const cache: Segment[] =
+    detail === 'bare'
+      ? [{ text: `${icon} ` }, { text: percent(turnRate), color: rateColor(turnRate) }]
+      : [
+          { text: `${icon} cache ` },
+          { text: bar(turnRate), color: rateColor(turnRate) },
+          { text: ` ${percent(turnRate)}${sessionText}` },
+        ]
+  // Bare keeps only the time left, or the TTL itself while a turn runs.
+  const ttlShown = detail === 'bare' ? ttlSegments.slice(-1) : ttlSegments
 
   return [
-    { text: `${weatherFor(turnRate).icon} cache ` },
-    { text: bar(turnRate), color: rateColor(turnRate) },
-    { text: ` ${percent(turnRate)}${sessionText}` },
-    ...(fill === null ? [] : [{ text: '   ' }, ...describeContext(fill)]),
-    ...(ttlSegments.length === 0 ? [] : [{ text: '   ' }, ...ttlSegments]),
+    ...cache,
+    ...(fill === null ? [] : [{ text: '   ' }, ...describeContext(fill, detail)]),
+    ...(ttlShown.length === 0 ? [] : [{ text: '   ' }, ...ttlShown]),
   ]
+}
+
+// Terminal cells a text takes: emoji take two, a variation selector none.
+export const cellWidth = (text: string): number => {
+  let cells = 0
+
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0
+    cells += code === 0xfe0f ? 0 : code >= 0x1f000 || (code >= 0x2600 && code <= 0x26ff) ? 2 : 1
+  }
+
+  return cells
+}
+
+// The most detailed row that fits the width, or the barest one when none does.
+export const fitRow = (draw: (detail: Detail) => Segment[] | undefined, columns: number | undefined) => {
+  for (const detail of DETAILS) {
+    const segments = draw(detail)
+
+    if (segments === undefined || columns === undefined || cellWidth(segments.map(one => one.text).join('')) <= columns) {
+      return segments
+    }
+  }
+
+  return draw('bare')
 }
 
 // Copies the status line's context figures into state, where the drawing reads them.
@@ -145,6 +190,8 @@ const isTtl = (value: unknown): value is CacheTtl => value === '5m' || value ===
 
 // The TTL of the newest main-thread response that wrote to the cache, read from
 // transcript lines. A response that only read the cache says nothing, so it is skipped.
+// A response that wrote both lifetimes answers 5m: that part goes cold first, and
+// the next prompt after it pays to write it again even though the 1h prefix still hits.
 export const ttlFromTranscript = (text: string): CacheTtl | null => {
   for (const line of text.split('\n').reverse()) {
     let entry: {
@@ -165,21 +212,32 @@ export const ttlFromTranscript = (text: string): CacheTtl | null => {
 
     const creation = entry.message?.usage?.cache_creation
 
-    if ((creation?.ephemeral_1h_input_tokens ?? 0) > 0) {
-      return '1h'
-    }
-
     if ((creation?.ephemeral_5m_input_tokens ?? 0) > 0) {
       return '5m'
+    }
+
+    if ((creation?.ephemeral_1h_input_tokens ?? 0) > 0) {
+      return '1h'
     }
   }
 
   return null
 }
 
-// Reads the end of the transcript, which is enough to hold the last few responses.
+// $.fs.read refuses files over 4 MiB, so a longer transcript is read from its end.
+const READ_LIMIT = 4 * 1024 * 1024
+const TAIL_BYTES = '1000000'
+
+// Reads the transcript, or the last megabyte of a long one, by bytes rather than
+// lines, since one tool result can fill many lines' worth on its own.
 async function readTtl($: EngineInterface, transcriptPath: string): Promise<CacheTtl | null> {
-  const tail = await $.process.run(['tail', '-n', '60', transcriptPath])
+  const { size } = await $.fs.stat(transcriptPath)
+
+  if (size <= READ_LIMIT) {
+    return ttlFromTranscript(await $.fs.read(transcriptPath))
+  }
+
+  const tail = await $.process.run(['tail', '-c', TAIL_BYTES, transcriptPath])
 
   return tail.exitCode === 0 ? ttlFromTranscript(tail.stdout) : null
 }
@@ -195,18 +253,34 @@ export const register: Register = on => {
     return started
   })
 
+  // A /clear or a resume moves the process to another conversation, whose cache
+  // and counts start over, so the row goes until that one's first turn ends.
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear' || e.reason === 'resume') {
+      await update($, lastTurn, () => null)
+      await update($, session, () => EMPTY)
+      await update($, context, () => null)
+      await update($, ttl, () => null)
+      await update($, refreshedAt, () => null)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('turn.complete', async ($, e, next) => {
     // Subagent turns run on their own cache prefix, so only the main thread counts.
     if (e.agentId === undefined && e.usage !== undefined) {
       const tally = toTally(e.usage)
       await update($, lastTurn, () => tally)
       await update($, session, sum => add(sum, tally))
-      await readContext($)
 
       if (tally.read + tally.written > 0) {
         const now = await $.clock.now()
         await update($, refreshedAt, () => now)
       }
+
+      // Last, so a usage read that fails leaves the figures above in place.
+      await readContext($)
     }
 
     return next(e)
@@ -247,7 +321,8 @@ export const register: Register = on => {
             now: await $.clock.now(),
             isWorking: e.props.isWorking,
           })
-    const segments = describe(await read($, lastTurn), await read($, session), await read($, context), ttlSegments)
+    const [turn, total, fill] = [await read($, lastTurn), await read($, session), await read($, context)]
+    const segments = fitRow(detail => describe(turn, total, fill, ttlSegments, detail), e.viewport?.columns)
 
     if (segments === undefined) {
       return engineLine
