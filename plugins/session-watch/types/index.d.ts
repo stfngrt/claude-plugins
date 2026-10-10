@@ -59,6 +59,8 @@ export type Thread = {
   /** The thread's cost when its last turn ended, for the per-turn timeline. */
   usdAtTurn: number
   window: number
+  /** True once the host measured this thread's window (the main thread's), so a model default never replaces it. */
+  isWindowMeasured?: boolean
   samples: Sample[]
   calls: Call[]
   /** The context just before the last compaction, and when it compacted. */

@@ -272,3 +272,66 @@ test('a stacked bar gives each part its glyph and at least one cell', () => {
 test('a sparkline scales to the window', () => {
   expect(sparkline([0, 500_000, 1_000_000], 1_000_000)).toBe('▁▅█')
 })
+
+// --- from the review
+
+test('calls with different nested arguments are different calls', () => {
+  const a = callKey('TodoWrite', { todos: [{ content: 'a', status: 'pending' }] })
+  const b = callKey('TodoWrite', { todos: [{ content: 'b', status: 'pending' }] })
+  expect(a).not.toBe(b)
+  expect(callKey('X', { b: 1, a: { d: 2, c: 3 } })).toBe(callKey('X', { a: { c: 3, d: 2 }, b: 1 }))
+})
+
+test('a finished agent drops out of the warnings five minutes after it ended', () => {
+  let l = normal()
+  const t0 = 30 * 20_000
+  for (let i = 0; i < 3; i++) l = call(l, 'a1', t0 + i * 1_000, 800 + i, 'npm test')
+  l = turnEnded(l, 'a1', t0 + 4_000, 'answer')
+  expect(ids(l, t0 + 60_000)).toContain('loop:a1/alert')
+  expect(ids(l, t0 + 6 * MIN).some(x => x.endsWith(':a1/alert'))).toBe(false)
+})
+
+test('the measured window survives later requests', () => {
+  let l = step(emptyLedger(), MAIN, 1_000, 150_000)
+  l = measured(l, { at: 2_000, rateLimits: [], window: 200_000 })
+  l = step(l, MAIN, 3_000, 185_000)
+  expect(l.threads.main?.window).toBe(200_000)
+  expect(ids(l, 4_000)).toContain('ceiling:main/warn')
+})
+
+test('waiting on a subagent through the Agent tool is no hang', () => {
+  let l = turnEnded(normal(), 'a1', 30 * 20_000, 'answer')
+  l = callStarted(l, MAIN, { id: 'ag', tool: 'Agent', key: 'Agent {}', summary: 'long job', at: 30 * 20_000 })
+  expect(ids(l, 30 * 20_000 + 40 * MIN).some(x => x.startsWith('hung:main'))).toBe(false)
+})
+
+test('a late spawn record does not revive a finished agent', () => {
+  let l = step(emptyLedger(), 'z', 1_000, 20_000)
+  l = turnEnded(l, 'z', 2_000, 'answer')
+  l = spawned(l, { id: 'z', type: 'Explore', description: 'late', model: OPUS, at: 500 })
+  expect(l.threads.z?.status).toBe('done')
+})
+
+test('a thread whose parent was never seen still shows in the tree', () => {
+  let l = step(emptyLedger(), MAIN, 0, 10_000)
+  l = spawned(l, { id: 'c', parentId: 'ghost', type: 'Explore', description: 'orphan', model: OPUS, at: 1 })
+  expect(tree(l).map(x => x.t.id)).toEqual(['main', 'c'])
+})
+
+test('dated Opus 4 ids are priced as Opus 4, Opus 4.5 and later are not', () => {
+  const u = { input_tokens: 1e6, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+  expect(costOf('claude-opus-4-20250514', u, true)).toBe(15)
+  expect(costOf('claude-opus-4-1-20250805', u, true)).toBe(15)
+  expect(costOf('claude-opus-4-8', u, true)).toBe(5)
+})
+
+test('the ledger keeps at most 40 threads, dropping finished agents first', () => {
+  let l = step(emptyLedger(), MAIN, 0, 10_000)
+  for (let i = 0; i < 50; i++) {
+    l = spawned(l, { id: `x${i}`, type: 'Explore', description: `${i}`, model: OPUS, at: i })
+    if (i < 45) l = turnEnded(l, `x${i}`, i + 1, 'answer')
+  }
+  expect(l.order.length).toBe(40)
+  expect(l.order).toContain('main')
+  expect(l.order).toContain('x49')
+})

@@ -154,6 +154,10 @@ export const register: Register = on => {
       const r = await next(e)
       isError = r.isError === true && !isRefusal(r.text)
       return r
+    } catch (error) {
+      // A call that threw failed as surely as one that answered an error.
+      isError = true
+      throw error
     } finally {
       await quietly(async () => {
         const at = await $.clock.now()
@@ -291,7 +295,7 @@ export const register: Register = on => {
       uncached: all.reduce((a, x) => a + x.uncached, 0),
       output: all.reduce((a, x) => a + x.output, 0),
     }
-    const started = Math.min(...threads.map(({ t }) => t.startedAt))
+    const started = threads.length ? Math.min(...threads.map(({ t }) => t.startedAt)) : at
     const requests = threads.reduce((a, { t }) => a + t.requests, 0)
     const toolCalls = Object.values(l.tools).reduce((a, x) => a + x.calls, 0)
     const toolErrors = Object.values(l.tools).reduce((a, x) => a + x.errors, 0)
@@ -408,7 +412,7 @@ export const register: Register = on => {
         <Text wrap="truncate-end">
           <Text bold>{minutesText(at - started)}</Text>
           <Text dimColor>
-            {' '}· {requests} requests · {toolCalls} tool calls{toolErrors ? ` (${toolErrors} failed)` : ''} · {threads.length - 1} agents
+            {' '}· {requests} requests · {toolCalls} tool calls{toolErrors ? ` (${toolErrors} failed)` : ''} · {threads.filter(({ t }) => t.id !== MAIN).length} agents
           </Text>
         </Text>
         <Text dimColor wrap="truncate-end">

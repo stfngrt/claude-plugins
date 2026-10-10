@@ -22,7 +22,8 @@ const PRICES: readonly (readonly [RegExp, Price])[] = [
   [/fable-5-1|mythos-5-1/, [10, 12.5, 20, 0.25, 50]],
   [/fable|mythos/, [10, 12.5, 20, 1, 50]],
   [/opus-5-5/, [4, 5, 8, 0.2, 20]],
-  [/opus-4-1|opus-4-0|opus-4(?!-\d)/, [15, 18.75, 30, 1.5, 75]],
+  // Opus 4 and 4.1, dated ids included (claude-opus-4-20250514), not Opus 4.5 and later.
+  [/opus-4(?:-[01])?(?:-\d{8})?(?![-\d])/, [15, 18.75, 30, 1.5, 75]],
   [/opus/, [5, 6.25, 10, 0.5, 25]],
   [/sonnet-5-5/, [2, 2.5, 4, 0.1, 10]],
   [/sonnet-5/, [2, 2.5, 4, 0.2, 10]],
@@ -104,14 +105,31 @@ const newThread = (id: string, at: number, fields: Partial<Thread> = {}): Thread
   ...fields,
 })
 
+// Past this many threads, the oldest finished subagents are dropped, so the ledger stays small.
+const MAX_THREADS = 40
+
 const withThread = (l: Ledger, id: string, at: number, change: (t: Thread) => Thread): Ledger => {
   const known = l.threads[id]
   const t = known ?? newThread(id, at)
-  return {
+  const next = {
     ...l,
     threads: { ...l.threads, [id]: change(t) },
     order: known ? l.order : [...l.order, id],
   }
+  return known ? next : prune(next)
+}
+
+const prune = (l: Ledger): Ledger => {
+  let order = l.order
+  const threads = { ...l.threads }
+  for (const id of l.order) {
+    if (order.length <= MAX_THREADS) break
+    const t = threads[id]
+    if (id === MAIN || !t || t.status === 'running') continue
+    delete threads[id]
+    order = order.filter(x => x !== id)
+  }
+  return { ...l, threads, order }
 }
 
 export const totalUsd = (l: Ledger): number =>
@@ -137,8 +155,9 @@ export const spawned = (
     type: a.type,
     description: a.description,
     model: a.model || t.model,
-    window: windowOf(a.model || t.model),
-    status: 'running',
+    window: t.isWindowMeasured ? t.window : windowOf(a.model || t.model),
+    // The spawn's bookkeeping can land after the run's own events: a run already ended stays ended.
+    status: t.status === 'done' || t.status === 'failed' ? t.status : 'running',
     startedAt: Math.min(t.startedAt, a.at),
   }))
 
@@ -187,7 +206,8 @@ export const stepEnded = (l: Ledger, id: string, at: number, r: StepResult | nul
       {
         ...t,
         model: u?.model || t.model,
-        window: window ?? windowOf(u?.model || t.model),
+        // The host's measured window wins over the model's default once it is known.
+        window: window ?? (t.isWindowMeasured ? t.window : windowOf(u?.model || t.model)),
         requestsRunning: Math.max(0, t.requestsRunning - 1),
         requests: t.requests + (u ? 1 : 0),
         usd: t.usd + usd,
@@ -204,7 +224,22 @@ export const stepEnded = (l: Ledger, id: string, at: number, r: StepResult | nul
 export const callKey = (tool: string, args: Record<string, unknown>): string => {
   if (tool === 'Bash') return `Bash ${String(args.command ?? '')}`
   const { description: _d, ...rest } = args
-  return `${tool} ${JSON.stringify(rest, Object.keys(rest).sort())}`
+  return `${tool} ${stableJson(rest)}`
+}
+
+// JSON with sorted keys at every depth. (An array replacer to JSON.stringify would
+// also drop every nested key not named at the top, so different TodoWrite lists
+// would read as the same call.)
+export const stableJson = (v: unknown): string => {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o)
+      .sort()
+      .map(k => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
 }
 
 export const callSummary = (tool: string, args: Record<string, unknown>): string => {
@@ -255,7 +290,7 @@ export const callEnded = (l: Ledger, id: string, callId: string, isError: boolea
       {
         ...t,
         calls,
-        errors: t.errors + (isError ? 1 : 0),
+        errors: t.errors + (isError && ended ? 1 : 0),
         toolMs: (t.toolMs ?? 0) + (ended ? Math.max(0, at - ended.at) : 0),
         runningTool: still ? { name: still.tool, summary: still.summary, at: still.at } : undefined,
       },
@@ -290,8 +325,13 @@ export const measured = (
   let next: Ledger = { ...l, rateLimits: [...m.rateLimits] }
   if (m.usd !== undefined) next = { ...next, hostUsd: m.usd, sinceHostUsd: 0 }
   const five = m.rateLimits.find(r => r.kind === 'five_hour')
-  if (five) next = { ...next, planTrail: trail(next.planTrail, m.at, five.percentUsed) }
-  if (m.window && next.threads[MAIN]) next = withThread(next, MAIN, m.at, t => ({ ...t, window: m.window ?? t.window }))
+  if (five) {
+    // A window that reset (its percentage fell) starts a fresh trail.
+    const before = next.planTrail.at(-1)
+    const kept = before && five.percentUsed < before.value ? [] : next.planTrail
+    next = { ...next, planTrail: trail(kept, m.at, five.percentUsed) }
+  }
+  if (m.window && next.threads[MAIN]) next = withThread(next, MAIN, m.at, t => ({ ...t, window: m.window ?? t.window, isWindowMeasured: true }))
   return next
 }
 
@@ -410,15 +450,23 @@ export const minutesText = (ms: number): string => {
   return m >= 60 ? `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m` : `${m}m`
 }
 
+// Tools whose call lasts as long as another agent works: their length is that agent's, not a hang.
+const WAITS_ON_AGENTS = new Set(['Agent', 'Task', 'Workflow'])
+
+// A thread that ended keeps its findings for this long, then drops out of the row.
+const RECENT_MS = 5 * MINUTE
+
 const threadVerdicts = (l: Ledger, t: Thread, now: number): Verdict[] => {
   const out: Verdict[] = []
   const v = (kind: string, level: Verdict['level'], cause: string, sentence: string) =>
     out.push({ id: `${kind}:${t.id}`, level, cause, sentence, threadId: t.id })
   const who = nameOf(t)
+  // A run that ended a while ago is history: what it hit then is no wall now.
+  if (t.status !== 'running' && now - (t.endedAt ?? t.lastActivityAt) > RECENT_MS) return out
 
   if (t.status === 'running') {
     const quiet = now - t.lastActivityAt
-    if (t.runningTool && now - t.runningTool.at >= T.hungToolMin * MINUTE) {
+    if (t.runningTool && !WAITS_ON_AGENTS.has(t.runningTool.name) && now - t.runningTool.at >= T.hungToolMin * MINUTE) {
       const age = now - t.runningTool.at
       v('hung', age >= T.hungToolAlertMin * MINUTE ? 'alert' : 'warn', `${who} ${t.runningTool.name} running ${minutesText(age)}`,
         `${who} has waited ${minutesText(age)} on ${t.runningTool.name}${t.runningTool.summary ? ` (${t.runningTool.summary})` : ''}.`)
@@ -753,5 +801,11 @@ export const tree = (l: Ledger): { t: Thread; depth: number }[] => {
   const main = l.threads[MAIN]
   if (main) out.push({ t: main, depth: 0 })
   walk(MAIN, main ? 1 : 0)
+  // A thread whose parent was never seen (a missed spawn) still shows, at the top level.
+  const placed = new Set(out.map(x => x.t.id))
+  for (const id of l.order) {
+    const t = l.threads[id]
+    if (t && !placed.has(id)) out.push({ t, depth: main ? 1 : 0 })
+  }
   return out
 }
