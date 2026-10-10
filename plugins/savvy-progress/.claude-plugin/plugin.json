@@ -18,6 +18,12 @@
         "en",
         "ru"
       ]
+    },
+    "svg": {
+      "type": "boolean",
+      "title": "Pictures on the desktop",
+      "description": "Draw the bar and the panel as SVG pictures in the desktop app instead of text",
+      "default": false
     }
   },
   "homepage": "https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress",

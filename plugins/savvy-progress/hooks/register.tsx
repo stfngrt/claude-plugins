@@ -620,6 +620,19 @@ const ctxBar = (pct: number, width: number): string => {
 
 const STATUS_GLYPH: Record<string, string> = { running: '●', done: '✓', failed: '✗', planned: '◷' }
 
+// The flow's tasks as a checklist. A task is done when its run finished, or, with no
+// run to go by, when it is among the first `done` tasks the orchestrator accepted.
+type CheckState = 'done' | 'running' | 'todo'
+
+const checklistOf = (f: Flow, list: AgentRun[]): { n: number; title: string; state: CheckState }[] =>
+  f.tasks.map((t, i) => {
+    const run = [...list].reverse().find(a => norm(a.description) === norm(t.title))
+    const state: CheckState = f.isFinished || run?.status === 'done' ? 'done' : run?.status === 'running' ? 'running' : !run && i < f.done ? 'done' : 'todo'
+    return { n: i + 1, title: t.title, state }
+  })
+
+const CHECK_GLYPH: Record<CheckState, string> = { done: '☑', running: '◐', todo: '☐' }
+
 // Opens the agents pane, or closes it when it is up; true when it ends up open.
 async function togglePane($: EngineInterface): Promise<boolean> {
   const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
@@ -641,6 +654,9 @@ async function autoOpen($: EngineInterface, key: string): Promise<void> {
 }
 
 export const register: Register = (on, options) => {
+  // The desktop app may draw an empty box for an Svg element, so the text drawing
+  // is the default on every surface; the `svg` option brings the pictures back.
+  const useSvg = options.svg === true
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     lang = await detectLang($, options.language)
@@ -894,7 +910,7 @@ export const register: Register = (on, options) => {
     const isEmpty = list.length === 0 && planned.length === 0
     const summary = `≈${fmtCost(t.cost)}, ${fmtTokens(t.tokens)} ${s.tokensWord}, ${fmtTime(t.time)}`
 
-    if (e.surface === 'desktop' && 'Svg' in ui) {
+    if (useSvg && e.surface === 'desktop' && 'Svg' in ui) {
       const { Svg } = ui
       const W = Math.max(240, Math.min(900, (e.props.bodyColumns || 40) * 8 - 8))
       const section = (key: string, text: string) => (
@@ -1045,7 +1061,7 @@ export const register: Register = (on, options) => {
       />
     )
 
-    if ('Svg' in ui) {
+    if (useSvg && 'Svg' in ui) {
       const { Svg } = ui
       // About 8 CSS px per reported column; the rest is the count, the dismiss
       // and their gaps. No floor above the slot: a row wider than it would wrap.
@@ -1055,6 +1071,33 @@ export const register: Register = (on, options) => {
           <Svg source={rowSvg(f, width, isWorking)} alt={`${f.title}: ${label(f)}, ${percent}`} width={width} height={H} />
           {crewButton}
           {dismiss}
+        </Box>
+      )
+    }
+
+    // A plan with tasks is drawn as a checklist under its title; one without keeps the bar.
+    const checklist = checklistOf(f, list)
+    if (checklist.length > 0) {
+      return (
+        <Box flexDirection="column">
+          <Box flexDirection="row" gap={2}>
+            <Text color={f.isFinished ? DONE : ACCENT}>●</Text>
+            <Text bold wrap="truncate-end">
+              {f.title}
+            </Text>
+            <Text dimColor>{label(f)}</Text>
+            {crewButton}
+            {dismiss}
+          </Box>
+          {checklist.map(item => (
+            <Text key={`check-${item.n}`} wrap="truncate-end">
+              {'  '}
+              <Text color={item.state === 'done' ? DONE : item.state === 'running' ? ACCENT : undefined} dimColor={item.state === 'todo'}>
+                {CHECK_GLYPH[item.state]}
+              </Text>{' '}
+              <Text dimColor={item.state === 'done'}>{item.title}</Text>
+            </Text>
+          ))}
         </Box>
       )
     }
