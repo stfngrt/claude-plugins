@@ -10,10 +10,10 @@ The cache bar is the share of the last turn's input tokens that the prompt cache
 
 The ctx bar is the context window fill after the last response. Its token count is the real input size of that response, with cached and uncached tokens counted together, out of the model's window. It is green below 50%, yellow below 80%, and red from 80%.
 
-The ttl text is the cache lifetime the last cache write used, `5m` or `1h`. The mod reads it from the session transcript, where every response records which lifetime its cache write used. When one response wrote with both, the row shows `5m`, because that part goes cold first. It counts down from the end of the last turn and shows a red `expired` once the cache has gone cold. A transcript over 4 MiB is read from its last megabyte with `tail`, which needs macOS, Linux or WSL; elsewhere the ttl text keeps its last value.
+The ttl text is the cache lifetime the last cache write used, `5m` or `1h`. The mod reads it from the session transcript, where every response records which lifetime its cache write used. When one response wrote with both, the row shows `5m`, because that part goes cold first. It counts down from when the last request that touched the cache was sent, not from when its answer finished streaming, and shows a red `expired` once the cache has gone cold. A transcript over 4 MiB is read from its last megabyte with `tail`, which needs macOS, Linux or WSL; elsewhere the ttl text keeps its last value.
 
 In a narrow terminal the row drops detail until it fits: first the token counts, then the session rate, then the bars, down to `☀️ 98%   ctx 12%   54m left`.
 
-The row appears after the first turn finishes, and goes again after `/clear` or a resume until the new conversation's first turn. The first turn of a session usually shows rain, because that turn writes the cache instead of reading it.
+The row appears after the first turn finishes, and goes again after `/clear` or a resume until the new conversation's first turn. With caching working, the sky stays sunny nearly all the time, at 98% or more per turn. The first turn of a session can be sunny too, because the system prompt is still cached from an earlier session; it rains when nothing reusable is cached, such as after a long break, a model switch or a changed CLAUDE.md.
 
 MIT licensed, see [LICENSE](LICENSE).

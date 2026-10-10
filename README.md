@@ -45,9 +45,11 @@ The prompt cache decides how much of each request Claude Code pays for in full. 
 | 60% to 79% | 🌤️ | Mostly cached. |
 | 40% to 59% | ☁️ | About half was paid in full. |
 | 20% to 39% | 🌦️ | The cache missed more than it hit. |
-| Below 20% | 🌧️ | Cold cache. The first turn of a session always looks like this. |
+| Below 20% | 🌧️ | Cold cache. Expect it after a long break, a model switch or a changed CLAUDE.md. |
 
-The cache bar's colour follows the sky: green for ☀️ and 🌤️, yellow for ☁️, red for 🌦️ and 🌧️. The ctx bar runs the other way, because a full window is the bad case, so it turns yellow at 50% and red at 80%. The ttl text is the cache lifetime the last cache write used, `5m` or `1h`, read from the session transcript; when a response wrote with both, it shows the shorter. It counts down from the end of the last turn and turns red at `expired`, the point where the next prompt writes the cache again. Subagent turns are left out of all of it, because a subagent builds a cache of its own.
+The cache bar's colour follows the sky: green for ☀️ and 🌤️, yellow for ☁️, red for 🌦️ and 🌧️. The ctx bar runs the other way, because a full window is the bad case, so it turns yellow at 50% and red at 80%. The ttl text is the cache lifetime the last cache write used, `5m` or `1h`, read from the session transcript; when a response wrote with both, it shows the shorter. It counts down from when the last request that touched the cache was sent, not from when its answer finished, and turns red at `expired`, the point where the next prompt writes the cache again. Subagent turns are left out of all of it, because a subagent builds a cache of its own.
+
+With caching working, the sky stays sunny nearly all the time: a session that keeps its cache reads 98% or more per turn. Even the first turn of a new session can be sunny, because the system prompt is still cached from an earlier one. The row is worth a look when it drops.
 
 In a narrow terminal the row drops the token counts, then the session rate, then the bars, so it stays on one line. After `/clear` or a resume it starts over with the new conversation.
 

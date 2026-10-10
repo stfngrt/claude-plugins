@@ -50,7 +50,7 @@ const writeLine = (ttl: '1h' | '5m') =>
   })
 
 for (const surface of ['terminal', 'desktop'] as const) {
-  test(`${surface}: the TTL counts down from the transcript and turns red once expired`, async ($, on) => {
+  test(`${surface}: the TTL counts down from the request and turns red once expired`, async ($, on) => {
     const clock = mock.clock(on)
     on('ui.render', { component: 'PromptHint' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -61,17 +61,31 @@ for (const surface of ['terminal', 'desktop'] as const) {
     on('classic.Stop', () => ({}))
     on('fs.stat', () => ({ value: { kind: 'file', size: 100, mtimeMs: 0, isLink: false } }))
     on('fs.read', () => ({ value: writeLine('5m') }))
+    // The response takes 30 seconds to stream after the request reached the cache.
+    on('turn.step', async function* ($, e) {
+      await clock.sleep(30_000)
+
+      return { turnId: e.turnId, index: e.index, answer: 'done', toolUses: [], stopReason: 'end_turn', usage: USAGE }
+    })
     on('session.start', ($, e) => ({ cwd: e.cwd }))
     // Starts the timer that redraws the countdown.
     await $.session.start({ cwd: '/', surface, isInteractive: true })
-    await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 10, reason: 'answer', isAborted: false, usage: USAGE })
+    const step = $.turn.step({ turnId: 't1', index: 0, model: 'test', messageCount: 1 })
+    const drained = (async () => {
+      for await (const _ of step) {
+      }
+    })()
+    await clock.advance(30_000)
+    await drained
+    await $.turn.complete({ turnId: 't1', answer: 'done', durationMs: 30_000, reason: 'answer', isAborted: false, usage: USAGE })
     await $.classic.Stop({ transcript_path: TRANSCRIPT, stop_hook_active: false })
 
     const ui = await $.ui.mount({ plugin: 'cache-weather', surface, component: 'PromptHint', props: PROPS })
 
     expect(JSON.stringify(await ui.drawn())).toContain('5m left')
 
-    await clock.advance(5 * 60_000)
+    // Five minutes after the request was sent, not after the answer ended.
+    await clock.advance(4.5 * 60_000)
 
     const drawn = JSON.stringify(await ui.drawn())
 

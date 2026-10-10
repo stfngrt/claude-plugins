@@ -11,7 +11,7 @@ const session = atom({ plugin: 'cache-weather', key: 'session' } as const, EMPTY
 const context = atom({ plugin: 'cache-weather', key: 'context' } as const, null)
 // The TTL the newest cache write used, read from the transcript or a model switch.
 const ttl = atom({ plugin: 'cache-weather', key: 'ttl' } as const, null)
-// When the last main-thread request read or wrote the cache, in clock milliseconds.
+// When the last main-thread request that read or wrote the cache was sent, in clock milliseconds.
 const refreshedAt = atom({ plugin: 'cache-weather', key: 'refreshedAt' } as const, null)
 // Moves on every thirty seconds so the time left counts down while nothing else happens.
 const tick = atom({ plugin: 'cache-weather', key: 'tick' } as const, 0)
@@ -103,7 +103,7 @@ export const minutesText = (ms: number): string => {
 
 export type TtlView = { ttl: CacheTtl; refreshedAt: number | null; now: number; isWorking: boolean }
 
-// How long the cache stays warm, counted from the last request that touched it.
+// How long the cache stays warm, counted from when the last request that touched it was sent.
 export const describeTtl = (view: TtlView): Segment[] => {
   const label = { text: `ttl ${view.ttl} · ` }
 
@@ -267,19 +267,31 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The cache lifetime starts over when a request reaches it, not when its answer
+  // has finished streaming, so the clock is read before each main-thread request.
+  on('turn.step', async function* ($, e, next) {
+    const sentAt = e.agentId === undefined ? await $.clock.now() : null
+    const result = yield* next(e)
+    const usage = result.usage
+
+    // The step's result is already the model's; a failed write here must not fail it.
+    if (sentAt !== null && usage !== null && usage.cache_read_input_tokens + usage.cache_creation_input_tokens > 0) {
+      try {
+        await update($, refreshedAt, () => sentAt)
+      } catch {
+        // The countdown keeps the previous request's time.
+      }
+    }
+
+    return result
+  })
+
   on('turn.complete', async ($, e, next) => {
     // Subagent turns run on their own cache prefix, so only the main thread counts.
     if (e.agentId === undefined && e.usage !== undefined) {
       const tally = toTally(e.usage)
       await update($, lastTurn, () => tally)
       await update($, session, sum => add(sum, tally))
-
-      if (tally.read + tally.written > 0) {
-        const now = await $.clock.now()
-        await update($, refreshedAt, () => now)
-      }
-
-      // Last, so a usage read that fails leaves the figures above in place.
       await readContext($)
     }
 
