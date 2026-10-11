@@ -30,6 +30,16 @@
       "license": "MIT"
     },
     {
+      "name": "session-line",
+      "source": "./plugins/session-line",
+      "description": "Mod: the model, the working directory and the git branch in a row under the prompt.",
+      "category": "mod",
+      "author": {
+        "name": "Stefan Engert"
+      },
+      "license": "MIT"
+    },
+    {
       "name": "session-watch",
       "source": "./plugins/session-watch",
       "description": "Mod: watches the session and every subagent for stalls, loops, error storms and the context ceiling; quiet under the prompt until something drifts, with a /session-watch sidebar of agents, diagnosis, cache growth and tools.",

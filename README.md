@@ -28,6 +28,7 @@ Each plugin here is a Claude Code mod. A mod is one TypeScript hooks module (`ho
 | --- | --- | --- |
 | [**cache-weather**](plugins/cache-weather) | A weather report for the prompt cache, a gauge for the context window and the time the cache has left, in one row under the prompt. | Stefan Engert |
 | [**savvy-progress**](plugins/savvy-progress) | A progress bar above the prompt and a live panel of every subagent. | [johnnyvizz](https://github.com/johnnyvizz) |
+| [**session-line**](plugins/session-line) | The model, the working directory and the git branch in one row under the prompt. | Stefan Engert |
 | [**session-watch**](plugins/session-watch) | Speaks up when the session or a subagent runs against a wall, with a sidebar on this session's agents, cache growth and tools. | Stefan Engert |
 
 ## cache-weather
@@ -71,6 +72,16 @@ savvy-progress puts a checklist above the prompt as soon as something reports a 
 
 It was made for johnnyvizz's [savvy-flow](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-flow) skill, which drives the bar on its own. That skill is not part of this repository. Without it the panel still tracks every subagent, and a session can call the `progress` tool itself. This README was written that way, with the list ticking off its three steps.
 
+## session-line
+
+session-line draws the model, the working directory and the checked-out git branch in one dim row above the hint line:
+
+```
+Opus 5.5 (1M context) · claude-plugins · main
+```
+
+It replaces a `statusLine` shell script with a mod, so nothing runs a shell and Python on every redraw. The row is read again when a turn ends, the model is switched or the session moves to another directory. Outside a repository, and on a detached HEAD, the branch is left out.
+
 ## session-watch
 
 session-watch stays quiet while a session runs normally. Its figures ride dim at the end of the hint line. When the main thread or a subagent runs against a wall, a row above the hint line names it, yellow or red, and a red one raises a toast once:
@@ -106,6 +117,7 @@ Add this folder as a marketplace once, then install the plugins you want:
 claude plugin marketplace add ~/Developer/claude/claude-plugins
 claude plugin install cache-weather@stefan-claude-plugins
 claude plugin install savvy-progress@stefan-claude-plugins
+claude plugin install session-line@stefan-claude-plugins
 claude plugin install session-watch@stefan-claude-plugins
 ```
 

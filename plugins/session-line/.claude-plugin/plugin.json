@@ -1,0 +1,10 @@
+{
+  "name": "session-line",
+  "version": "0.1.0",
+  "description": "Shows the model, the working directory and the git branch in a row under the prompt",
+  "author": {
+    "name": "Stefan Engert"
+  },
+  "types": "./types/index.d.ts",
+  "license": "MIT"
+}
