@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, SessionMessage, ToolUseSummary } from 'claude-code'
 
 import type { Ledger, Thread } from '../types'
 import {
@@ -23,6 +23,7 @@ import {
   measured,
   normalize,
   minutesText,
+  restored,
   planOutlook,
   rowSegments,
   spawned,
@@ -37,10 +38,11 @@ import {
   turnEnded,
   usdText,
 } from './core'
-import type { BarKind, Verdict } from './core'
+import type { BarKind, PastThread, Verdict } from './core'
 
 const ledger = atom({ plugin: 'session-watch', key: 'ledger' } as const, emptyLedger())
 const now = atom({ plugin: 'session-watch', key: 'now' } as const, 0)
+const filledFor = atom({ plugin: 'session-watch', key: 'filledFor' } as const, '')
 
 const PANE = 'session-watch'
 const TICK_MS = 15_000
@@ -71,6 +73,66 @@ const toolArgs = (e: Record<string, unknown>): Record<string, unknown> => {
   return args
 }
 
+// A subagent's Agent call left unanswered is still running; one answered with an error failed.
+const pastStatus = (use: ToolUseSummary): Thread['status'] =>
+  use.text === undefined ? 'running' : use.isError ? 'failed' : 'done'
+
+// The transcript so far, main thread and every subagent beneath it, as the ledger counts it.
+async function readPast($: EngineInterface, startedAt: number, at: number): Promise<PastThread[]> {
+  const past: PastThread[] = []
+  const visit = async (messages: readonly SessionMessage[], self: PastThread) => {
+    past.push(self)
+    const uses = messages.flatMap(m => m.toolUses)
+    for (const use of uses) {
+      self.calls = [...self.calls, { id: use.tool_use_id, tool: use.tool, isError: use.isError === true && !isRefusal(use.text) }]
+      if (!use.agentId || past.length >= 40) continue
+      const found = await $.session.messages({ agentId: use.agentId })
+      if ('deny' in found) continue
+      const input = use.input
+      await visit(found, {
+        id: use.agentId,
+        parentId: self.id,
+        type: typeof input.subagent_type === 'string' ? input.subagent_type : 'general-purpose',
+        description: typeof input.description === 'string' ? input.description : '',
+        model: typeof input.model === 'string' ? input.model : '',
+        status: pastStatus(use),
+        startedAt: use.durationMs === undefined ? at : at - use.durationMs,
+        endedAt: use.text === undefined ? undefined : at,
+        calls: [],
+      })
+    }
+  }
+  await visit(await $.session.messages(), { id: MAIN, status: 'idle', startedAt, calls: [] })
+  return past
+}
+
+// Once per conversation: fills in what happened before the mod was watching, so a resumed
+// session, or one the mod was enabled in partway, shows its tool calls and agents at once.
+// A reload of the module keeps the ledger and finds this conversation already filled in.
+async function fillIn($: EngineInterface): Promise<void> {
+  const id = await $.session.id()
+  if ((await read($, filledFor)) === id) return
+  await update($, filledFor, () => id)
+  const at = await $.clock.now()
+  const usage = await $.session.usage()
+  const past = await readPast($, usage.startedAt, at)
+  const hasHistory = past.some(p => p.calls.length > 0)
+  await edit($, l => {
+    const withPast = hasHistory ? restored(l, past, at) : l
+    return measured(withPast, { at, usd: usage.cost?.usd, rateLimits: usage.rateLimits, window: usage.context.window })
+  })
+}
+
+// The sidebar is the large view; the row under the prompt the small one. The command, the
+// row's expand button and the sidebar's close button all move between them.
+async function openPane($: EngineInterface): Promise<void> {
+  const at = await $.clock.now()
+  await update($, now, () => at)
+  await $.ui.open({ id: PANE, title: 'Session watch' })
+}
+
+const closePane = ($: EngineInterface) => $.ui.close({ id: PANE })
+
 // Keeps the incident log and raises a toast for each incident that just turned red.
 async function refresh($: EngineInterface): Promise<void> {
   const at = await $.clock.now()
@@ -95,8 +157,11 @@ export const register: Register = on => {
       })
       await update($, now, () => 0)
     })
+    await quietly(() => fillIn($))
     $.clock.every(TICK_MS, () => {
       void quietly(async () => {
+        // A /clear or a resume raises no session.start: the next tick fills the new conversation in.
+        await quietly(() => fillIn($))
         const at = await $.clock.now()
         await update($, now, () => at)
         await refresh($)
@@ -115,6 +180,7 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     const id = e.agentId ?? MAIN
     const effort = e.effort === undefined ? undefined : String(e.effort)
+    await quietly(() => fillIn($))
     await quietly(async () => {
       const at = await $.clock.now()
       await edit($, l =>  stepStarted(l, id, at, e.model, effort))
@@ -211,12 +277,10 @@ export const register: Register = on => {
   on('command.run', { command: 'session-watch' }, async $ => {
     const isOpen = (await $.ui.panes()).some(p => p.id === PANE)
     if (isOpen) {
-      await $.ui.close({ id: PANE })
+      await closePane($)
       return { text: 'session-watch sidebar closed.' }
     }
-    const at = await $.clock.now()
-    await update($, now, () => at)
-    await $.ui.open({ id: PANE, title: 'Session watch' })
+    await openPane($)
     return { text: 'session-watch sidebar opened.' }
   })
 
@@ -236,13 +300,22 @@ export const register: Register = on => {
     }
 
     const line = await next(e)
-    const segments = fitRow(d => rowSegments(l, at, verdicts, d), cols)
-    const { Box, Text } = $.ui.resolve(e)
+    const isPaneOpen = await $.ui.panes().then(
+      panes => panes.some(p => p.id === PANE),
+      () => false,
+    )
+    const segments = fitRow(d => rowSegments(l, at, verdicts, d), cols ? Math.max(20, cols - (isPaneOpen ? 0 : 11)) : undefined)
+    const { Box, Text, Button } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        <Text wrap="truncate-end">
-          {segments.map(s => (s.color === undefined ? <Text dimColor>{s.text}</Text> : <Text color={s.color}>{s.text}</Text>))}
-        </Text>
+        <Box flexDirection="row">
+          <Text wrap="truncate-end">
+            {segments.map(s => (s.color === undefined ? <Text dimColor>{s.text}</Text> : <Text color={s.color}>{s.text}</Text>))}
+          </Text>
+          {isPaneOpen ? null : (
+            <Button key="expand" label="Details" plain dimColor onPress={() => void quietly(() => openPane($))} />
+          )}
+        </Box>
         {line}
       </Box>
     )
@@ -251,7 +324,7 @@ export const register: Register = on => {
   // The sidebar, drawn as tokenol draws a session: stacked bars, not sparklines.
   // Agents with their diagnosis, then cache growth request by request, then where the money went.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
     const l: Ledger = normalize(await read($, ledger))
     const at = Math.max(await read($, now), lastEventAt(l))
     const cols = Math.max(28, e.props.bodyColumns || 40)
@@ -260,8 +333,16 @@ export const register: Register = on => {
     const flagged = new Map<string, Verdict[]>()
     for (const v of verdicts) if (v.threadId) flagged.set(v.threadId, [...(flagged.get(v.threadId) ?? []), v])
 
+    const close = (
+      <Button key="close" role="dismiss" hotkey="q" label="Close" plain dimColor onPress={() => void quietly(() => closePane($))} />
+    )
     if (l.order.length === 0) {
-      return <Text dimColor>Nothing yet: the first request fills this in.</Text>
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>Nothing yet: the first request fills this in.</Text>
+          {close}
+        </Box>
+      )
     }
 
     const heading = (text: string) => (
@@ -409,12 +490,20 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        <Text wrap="truncate-end">
-          <Text bold>{minutesText(at - started)}</Text>
-          <Text dimColor>
-            {' '}· {requests} requests · {toolCalls} tool calls{toolErrors ? ` (${toolErrors} failed)` : ''} · {threads.filter(({ t }) => t.id !== MAIN).length} agents
+        <Box flexDirection="row" justifyContent="space-between">
+          <Text wrap="truncate-end">
+            <Text bold>{minutesText(at - started)}</Text>
+            <Text dimColor>
+              {' '}· {requests} requests · {toolCalls} tool calls{toolErrors ? ` (${toolErrors} failed)` : ''} · {threads.filter(({ t }) => t.id !== MAIN).length} agents
+            </Text>
           </Text>
-        </Text>
+          {close}
+        </Box>
+        {l.restoredAt !== undefined ? (
+          <Text dimColor wrap="truncate-end">
+            tool calls and agents from before {clock(l.restoredAt)} read from the transcript; tokens and timings start there
+          </Text>
+        ) : null}
         <Text dimColor wrap="truncate-end">
           tokens: {tokensText(sums.read)} read · {tokensText(sums.written)} written · {tokensText(sums.uncached)} uncached · {tokensText(sums.output)} out
           {sums.read + sums.written + sums.uncached > 0 ? ` · hit ${Math.round((sums.read / (sums.read + sums.written + sums.uncached)) * 100)}%` : ''}

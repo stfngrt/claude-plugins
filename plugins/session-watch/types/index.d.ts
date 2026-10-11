@@ -100,6 +100,8 @@ export type Ledger = {
   /** The five-hour window's percentUsed over time. */
   planTrail: Point[]
   incidents: Incident[]
+  /** When the history from before the mod loaded was filled in from the transcript: tool calls and agents, no tokens. */
+  restoredAt?: number
 }
 
 declare module 'claude-code' {
@@ -108,6 +110,8 @@ declare module 'claude-code' {
       ledger: Ledger
       /** The clock, moved on every fifteen seconds so ages stay current. */
       now: number
+      /** The session whose transcript the ledger was filled in from, so a reload does not count it twice. */
+      filledFor: string
     }
   }
 }

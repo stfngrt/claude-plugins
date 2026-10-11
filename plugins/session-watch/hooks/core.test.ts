@@ -14,6 +14,7 @@ import {
   evaluate,
   isEfficiency,
   measured,
+  restored,
   rowSegments,
   sparkline,
   spawned,
@@ -334,4 +335,23 @@ test('the ledger keeps at most 40 threads, dropping finished agents first', () =
   expect(l.order.length).toBe(40)
   expect(l.order).toContain('main')
   expect(l.order).toContain('x49')
+})
+
+test('restored: the transcript counts once, never into the windows the alarms read', () => {
+  let l = callStarted(emptyLedger(), MAIN, { id: 'u2', tool: 'Read', key: 'Read {}', summary: '', at: 5 * MIN })
+  l = callEnded(l, MAIN, 'u2', false, 5 * MIN)
+  const past = [
+    { id: MAIN, status: 'idle' as const, startedAt: MIN, calls: [{ id: 'u1', tool: 'Bash', isError: true }, { id: 'u2', tool: 'Read', isError: false }] },
+    { id: 'a9', parentId: MAIN, type: 'Explore', description: 'old', status: 'done' as const, startedAt: 2 * MIN, endedAt: 6 * MIN, calls: [] },
+  ]
+  const r = restored(l, past, 6 * MIN)
+  expect(r.threads[MAIN]?.toolCalls).toBe(2)
+  expect(r.threads[MAIN]?.errors).toBe(1)
+  expect(r.threads[MAIN]?.startedAt).toBe(MIN)
+  expect(r.threads[MAIN]?.calls.map(c => c.id)).toEqual(['u2'])
+  expect(r.tools.Read?.calls).toBe(1)
+  expect(r.threads.a9?.status).toBe('done')
+  expect(r.threads.a9?.parentId).toBe(MAIN)
+  expect(r.restoredAt).toBe(6 * MIN)
+  expect(evaluate(r, 6 * MIN).filter(v => !isEfficiency(v))).toEqual([])
 })

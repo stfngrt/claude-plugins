@@ -18,9 +18,11 @@ When something drifts, it gets a row above the hint line that names the cause, y
 
 A narrow terminal drops the detail first. Each incident that turns red also raises one toast. The desktop app has no hint-line tail, so there the figures always get a dim row.
 
+That row ends in a **Details** button that opens the sidebar. The quiet tail on the terminal has no room for one, so there `/session-watch` opens it.
+
 ## The sidebar: `/session-watch`
 
-The sidebar covers this session only; overall spend is left to an external tool. It draws stacked bars the way tokenol does, with a legend: `█` read from the cache, `▓` written to it, `░` uncached, `▒` output.
+`/session-watch` opens and closes it, and so do the **Details** button under the prompt and the **Close** button at the top of the sidebar (the desktop app draws it as its own close control; `q` presses it while the sidebar has the focus). The sidebar covers this session only; overall spend is left to an external tool. It draws stacked bars the way tokenol does, with a legend: `█` read from the cache, `▓` written to it, `░` uncached, `▒` output.
 
 - **Header:** the session's time, requests, tool calls and failures, agents, and its tokens split into read, written, uncached and output with the overall hit rate. Below that, the 5h plan window: how full it is, when it resets, and when it would run out at this pace.
 - **Agents:** the main thread and every subagent as a tree, nested subagents under their parent. Each block shows:
@@ -64,6 +66,10 @@ These only show in the sidebar, among the diagnosis:
 They describe how a session spends, not whether it is stuck.
 
 The thresholds are fixed and there are no settings. Most come from tokenol. The rest were checked against a replay of past sessions (below). The mod keeps nothing between sessions.
+
+## A session already under way
+
+When the mod starts watching a conversation it has not seen (it was enabled partway through, or the session was resumed), it reads the transcript once through `$.session.messages()`, main thread and subagents. That fills in the tool calls, failures and agents from before. Claude Code's own cost, the plan window and the context size come from `$.session.usage()` and are complete anyway. The transcript has no tokens and no times, so the cache bars and timings start when the mod started watching, and the sidebar says so. The older calls are counted, but they never reach the windows the alarms read, so an old loop raises nothing.
 
 ## Cost figures
 

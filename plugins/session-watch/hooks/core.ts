@@ -335,6 +335,60 @@ export const measured = (
   return next
 }
 
+/** A thread as the transcript holds it: its tool calls, with no times and no tokens. */
+export type PastThread = {
+  id: string
+  parentId?: string
+  type?: string
+  description?: string
+  model?: string
+  status: Thread['status']
+  startedAt: number
+  endedAt?: number
+  calls: readonly { id: string; tool: string; isError: boolean }[]
+}
+/**
+ * The history from before the mod loaded (enabled mid-session, or a resumed session),
+ * read from the transcript. It counts tool calls, failures and agents only: the transcript
+ * carries no times, so none of it enters the windows the detectors read, and an old loop
+ * raises no alarm. A call the live events already counted is skipped.
+ */
+export const restored = (l: Ledger, past: readonly PastThread[], at: number): Ledger => {
+  let next = l
+  for (const p of past) {
+    const known = new Set(next.threads[p.id]?.calls.map(c => c.id) ?? [])
+    const calls = p.calls.filter(c => !known.has(c.id))
+    for (const c of calls) {
+      next = toolStat(next, c.tool, s => ({
+        ...s,
+        calls: s.calls + 1,
+        errors: s.errors + (c.isError ? 1 : 0),
+        threads: s.threads.includes(p.id) ? s.threads : [...s.threads, p.id],
+      }))
+    }
+    const isNew = !next.threads[p.id]
+    next = withThread(next, p.id, at, t => ({
+      ...t,
+      ...(isNew && p.id !== MAIN
+        ? {
+            parentId: p.parentId ?? MAIN,
+            type: p.type || t.type,
+            description: p.description ?? t.description,
+            model: p.model || t.model,
+            window: windowOf(p.model || t.model),
+            status: p.status,
+            endedAt: p.endedAt,
+          }
+        : {}),
+      ...(isNew && p.id === MAIN ? { status: 'idle' as const } : {}),
+      startedAt: Math.min(t.startedAt, p.startedAt),
+      toolCalls: t.toolCalls + calls.length,
+      errors: t.errors + calls.filter(c => c.isError).length,
+    }))
+  }
+  return { ...next, restoredAt: at }
+}
+
 // ---------------------------------------------------------------------------
 // Measures.
 
