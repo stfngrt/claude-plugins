@@ -122,25 +122,32 @@ export const describe = (
   fill: ContextFill | null,
   ttlSegments: Segment[] = [],
   detail: Detail = 'full',
-): Segment[] | undefined => {
-  const turnRate = turn === null ? null : hitRate(turn)
+): Segment[] => {
+  // The session's rate leads, since one turn's rate swings with what it added.
+  const sessionRate = hitRate(total)
 
-  if (turnRate === null) {
-    return undefined
+  // Before the first answer there is no rate yet, so the row shows that it waits for one.
+  if (sessionRate === null) {
+    return withRest(detail === 'bare' ? [{ text: 'cache –' }] : [{ text: `cache ${bar(0)} –` }], fill, ttlSegments, detail)
   }
 
-  const totalRate = hitRate(total)
-  const hasSession = totalRate !== null && (detail === 'full' || detail === 'short')
-  const sessionText = hasSession ? ` · session ${percent(totalRate)}` : ''
-  const icon = weatherFor(turnRate).icon
+  const turnRate = turn === null ? null : hitRate(turn)
+  const hasTurn = turnRate !== null && (detail === 'full' || detail === 'short')
+  const turnText = hasTurn ? ` · turn ${percent(turnRate)}` : ''
+  const icon = weatherFor(sessionRate).icon
   const cache: Segment[] =
     detail === 'bare'
-      ? [{ text: `${icon} ` }, { text: percent(turnRate), color: rateColor(turnRate) }]
+      ? [{ text: `${icon} ` }, { text: percent(sessionRate), color: rateColor(sessionRate) }]
       : [
           { text: `${icon} cache ` },
-          { text: bar(turnRate), color: rateColor(turnRate) },
-          { text: ` ${percent(turnRate)}${sessionText}` },
+          { text: bar(sessionRate), color: rateColor(sessionRate) },
+          { text: ` ${percent(sessionRate)}${turnText}` },
         ]
+  return withRest(cache, fill, ttlSegments, detail)
+}
+
+// The cache part followed by the context fill and the TTL, where they are known.
+const withRest = (cache: Segment[], fill: ContextFill | null, ttlSegments: Segment[], detail: Detail): Segment[] => {
   // Bare keeps only the time left, or the TTL itself while a turn runs.
   const ttlShown = detail === 'bare' ? ttlSegments.slice(-1) : ttlSegments
 
@@ -230,17 +237,93 @@ const TAIL_BYTES = '1000000'
 
 // Reads the transcript, or the last megabyte of a long one, by bytes rather than
 // lines, since one tool result can fill many lines' worth on its own.
-async function readTtl($: EngineInterface, transcriptPath: string): Promise<CacheTtl | null> {
+async function readTranscript($: EngineInterface, transcriptPath: string): Promise<string | null> {
   const { size } = await $.fs.stat(transcriptPath)
 
   if (size <= READ_LIMIT) {
-    return ttlFromTranscript(await $.fs.read(transcriptPath))
+    return $.fs.read(transcriptPath)
   }
 
   const tail = await $.process.run(['tail', '-c', TAIL_BYTES, transcriptPath])
 
-  return tail.exitCode === 0 ? ttlFromTranscript(tail.stdout) : null
+  return tail.exitCode === 0 ? tail.stdout : null
 }
+
+async function readTtl($: EngineInterface, transcriptPath: string): Promise<CacheTtl | null> {
+  const text = await readTranscript($, transcriptPath)
+
+  return text === null ? null : ttlFromTranscript(text)
+}
+
+export type Restored = { lastTurn: CacheTally | null; session: CacheTally; ttl: CacheTtl | null }
+
+// The counts a resumed conversation had, rebuilt from its transcript: the last
+// prompt's responses as the last turn, every main-thread response as the session.
+// One response is written as several lines that share its message id and usage,
+// so each id counts once. A long transcript is only read from its end, so its
+// session rate covers that stretch.
+export const restoreFromTranscript = (text: string): Restored => {
+  const seen = new Set<string>()
+  let session = EMPTY
+  let lastTurn: CacheTally | null = null
+
+  for (const line of text.split('\n')) {
+    let entry: {
+      type?: string
+      isSidechain?: boolean
+      message?: {
+        id?: string
+        content?: unknown
+        usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+      }
+    }
+
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+
+    if (entry === null || typeof entry !== 'object' || entry.isSidechain === true) {
+      continue
+    }
+
+    // A prompt the person typed starts a turn; a tool result does not.
+    if (entry.type === 'user' && !isToolResult(entry.message?.content)) {
+      lastTurn = null
+      continue
+    }
+
+    const usage = entry.message?.usage
+
+    if (entry.type !== 'assistant' || usage === undefined) {
+      continue
+    }
+
+    const id = entry.message?.id
+
+    if (id !== undefined) {
+      if (seen.has(id)) {
+        continue
+      }
+
+      seen.add(id)
+    }
+
+    const tally: CacheTally = {
+      read: usage.cache_read_input_tokens ?? 0,
+      written: usage.cache_creation_input_tokens ?? 0,
+      uncached: usage.input_tokens ?? 0,
+    }
+    session = add(session, tally)
+    lastTurn = add(lastTurn ?? EMPTY, tally)
+  }
+
+  return { lastTurn, session, ttl: ttlFromTranscript(text) }
+}
+
+const isToolResult = (content: unknown): boolean =>
+  Array.isArray(content) && content.some(block => (block as { type?: unknown } | null)?.type === 'tool_result')
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -253,15 +336,37 @@ export const register: Register = on => {
     return started
   })
 
-  // A /clear or a resume moves the process to another conversation, whose cache
-  // and counts start over, so the row goes until that one's first turn ends.
+  // A /clear moves the process to a new conversation, whose cache and counts
+  // start over. A resume is handled where it starts, below.
   on('session.end', async ($, e, next) => {
-    if (e.reason === 'clear' || e.reason === 'resume') {
+    if (e.reason === 'clear') {
       await update($, lastTurn, () => null)
       await update($, session, () => EMPTY)
       await update($, context, () => null)
       await update($, ttl, () => null)
       await update($, refreshedAt, () => null)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // A resumed conversation, at launch or through /resume, brings its own counts:
+  // they are read back from its transcript so the row shows them at once.
+  // This hook only listens, so a failure lets the session start as usual.
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'resume' || e.source === 'fork') {
+      const text = await readTranscript($, e.transcript_path)
+      const restored = text === null ? { lastTurn: null, session: EMPTY, ttl: null } : restoreFromTranscript(text)
+      const since = e.seconds_since_last_response
+      const sentAt = since === undefined || restored.lastTurn === null ? null : (await $.clock.now()) - since * 1000
+      await update($, lastTurn, () => restored.lastTurn)
+      await update($, session, () => restored.session)
+      await update($, ttl, () => restored.ttl)
+      await update($, refreshedAt, () => sentAt)
+      // The status line's figures first; before they exist, the resumed transcript's last response.
+      const { tokens, window } = (await $.session.usage()).context
+      const filled = tokens ?? e.context_tokens
+      await update($, context, () => (filled === undefined ? null : { tokens: filled, window }))
     }
 
     return next(e)
@@ -335,10 +440,6 @@ export const register: Register = on => {
           })
     const [turn, total, fill] = [await read($, lastTurn), await read($, session), await read($, context)]
     const segments = fitRow(detail => describe(turn, total, fill, ttlSegments, detail), e.viewport?.columns)
-
-    if (segments === undefined) {
-      return engineLine
-    }
 
     const { Box, Text } = $.ui.resolve(e)
 

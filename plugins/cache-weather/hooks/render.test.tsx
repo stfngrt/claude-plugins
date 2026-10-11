@@ -23,7 +23,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(drawn.indexOf('cache ')).toBeLessThan(drawn.indexOf('auto mode on'))
   })
 
-  test(`${surface}: before any turn the engine's line is left alone`, async ($, on) => {
+  test(`${surface}: before any turn the row waits above the engine's line`, async ($, on) => {
     mock.clock(on)
     on('ui.render', { component: 'PromptHint' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -32,8 +32,10 @@ for (const surface of ['terminal', 'desktop'] as const) {
     })
 
     const ui = await $.ui.mount({ plugin: 'cache-weather', surface, component: 'PromptHint', props: PROPS })
+    const drawn = JSON.stringify(await ui.drawn())
 
-    expect(JSON.stringify(await ui.drawn())).not.toContain('cache ')
+    expect(drawn).toContain('cache ░░░░░░░░░░ –')
+    expect(drawn).toContain('auto mode on')
   })
 }
 
@@ -116,7 +118,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(drawn).toContain('90%')
   })
 
-  test(`${surface}: a /clear takes the row away until the next turn`, async ($, on) => {
+  test(`${surface}: a /clear empties the row until the next turn`, async ($, on) => {
     mock.clock(on)
     on('ui.render', { component: 'PromptHint' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -129,7 +131,47 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
 
     const ui = await $.ui.mount({ plugin: 'cache-weather', surface, component: 'PromptHint', props: PROPS })
+    const drawn = JSON.stringify(await ui.drawn())
 
-    expect(JSON.stringify(await ui.drawn())).not.toContain('cache ')
+    expect(drawn).toContain('cache ░░░░░░░░░░ –')
+    expect(drawn).not.toContain('%')
+  })
+
+  test(`${surface}: a resumed session shows its transcript's figures at once`, async ($, on) => {
+    mock.clock(on)
+    on('ui.render', { component: 'PromptHint' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>{e.props.hint}</Text>
+    })
+    on('classic.SessionStart', () => ({}))
+    on('fs.stat', () => ({ value: { kind: 'file', size: 100, mtimeMs: 0, isLink: false } }))
+    on('fs.read', () => ({
+      value: [
+        JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            id: 'm1',
+            usage: {
+              input_tokens: 10,
+              cache_read_input_tokens: 90,
+              cache_creation_input_tokens: 0,
+              cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+            },
+          },
+        }),
+        writeLine('1h'),
+      ].join('\n'),
+    }))
+    await $.classic.SessionStart({ source: 'resume', transcript_path: TRANSCRIPT, seconds_since_last_response: 600 })
+
+    const ui = await $.ui.mount({ plugin: 'cache-weather', surface, component: 'PromptHint', props: PROPS })
+    const drawn = JSON.stringify(await ui.drawn())
+
+    expect(drawn).toContain('cache ')
+    expect(drawn).toContain('%')
+    expect(drawn).toContain('ttl 1h')
+    expect(drawn).toContain('50m left')
   })
 }

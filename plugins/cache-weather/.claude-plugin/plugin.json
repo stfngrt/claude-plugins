@@ -1,6 +1,6 @@
 {
   "name": "cache-weather",
-  "version": "0.7.1",
+  "version": "0.9.0",
   "description": "Shows the prompt cache hit rate as weather, the context window fill as a bar, and the time left on the cache under the prompt",
   "author": {
     "name": "Stefan Engert"

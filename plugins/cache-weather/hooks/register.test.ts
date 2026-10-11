@@ -13,6 +13,7 @@ import {
   rateColor,
   toTally,
   tokensText,
+  restoreFromTranscript,
   ttlFromTranscript,
   weatherFor,
 } from './register'
@@ -47,7 +48,7 @@ test('the context bar shows the real token count and turns red when full', () =>
   expect(describeContext({ tokens: 850_000, window: 1_000_000 })[1]?.color).toBe('error')
 })
 
-test('the row shows the turn rate, the session rate and the context', () => {
+test('the row shows the session rate, the turn rate and the context', () => {
   const turn = toTally({
     input_tokens: 10,
     output_tokens: 50,
@@ -57,12 +58,41 @@ test('the row shows the turn rate, the session rate and the context', () => {
   const total = add(turn, { read: 0, written: 1000, uncached: 0 })
 
   expect(describe(turn, total, null)).toEqual([
-    { text: '☀️ cache ' },
-    { text: '█████████▊', color: 'success' },
-    { text: ' 98% · session 49%' },
+    { text: '☁️ cache ' },
+    { text: '████▉░░░░░', color: 'warning' },
+    { text: ' 49% · turn 98%' },
   ])
-  expect(text(describe(turn, total, { tokens: 500_000, window: 1_000_000 }) ?? [])).toContain('   ctx █████░░░░░ 50%')
-  expect(describe(null, total, null)).toBe(undefined)
+  expect(text(describe(turn, total, { tokens: 500_000, window: 1_000_000 }))).toContain('   ctx █████░░░░░ 50%')
+  const none = { read: 0, written: 0, uncached: 0 }
+  expect(text(describe(null, none, null))).toBe('cache ░░░░░░░░░░ –')
+  expect(text(describe(null, none, null, [], 'bare'))).toBe('cache –')
+})
+
+test('a resumed transcript gives back the last turn and the session', () => {
+  const answer = (id: string, read: number, written: number, uncached: number) =>
+    JSON.stringify({
+      type: 'assistant',
+      message: { id, usage: { input_tokens: uncached, cache_read_input_tokens: read, cache_creation_input_tokens: written } },
+    })
+  const lines = [
+    JSON.stringify({ type: 'user', message: { content: 'first' } }),
+    answer('a', 0, 100, 10),
+    JSON.stringify({ type: 'user', message: { content: 'second' } }),
+    answer('b', 100, 10, 0),
+    // The same response again, as its next content block.
+    answer('b', 100, 10, 0),
+    JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+    answer('c', 110, 5, 0),
+    JSON.stringify({ type: 'assistant', isSidechain: true, message: { id: 'd', usage: { input_tokens: 999 } } }),
+    'not json',
+  ]
+
+  expect(restoreFromTranscript(lines.join('\n'))).toEqual({
+    lastTurn: { read: 210, written: 15, uncached: 0 },
+    session: { read: 210, written: 115, uncached: 10 },
+    ttl: null,
+  })
+  expect(restoreFromTranscript('')).toEqual({ lastTurn: null, session: { read: 0, written: 0, uncached: 0 }, ttl: null })
 })
 
 test('the TTL is plain text that counts down and then expires', () => {
@@ -120,8 +150,8 @@ test('the row drops detail until it fits the width', () => {
   const row = (columns?: number) =>
     text(fitRow(detail => describe(turn, turn, fill, ttlSegments, detail), columns) ?? [])
 
-  expect(row()).toBe('☀️ cache █████████▊ 98% · session 98%   ctx █▎░░░░░░░░ 12% · 120k / 1M   ttl 1h · 54m left')
-  expect(row(80)).toBe('☀️ cache █████████▊ 98% · session 98%   ctx █▎░░░░░░░░ 12%   ttl 1h · 54m left')
+  expect(row()).toBe('☀️ cache █████████▊ 98% · turn 98%   ctx █▎░░░░░░░░ 12% · 120k / 1M   ttl 1h · 54m left')
+  expect(row(80)).toBe('☀️ cache █████████▊ 98% · turn 98%   ctx █▎░░░░░░░░ 12%   ttl 1h · 54m left')
   expect(row(70)).toBe('☀️ cache █████████▊ 98%   ctx █▎░░░░░░░░ 12%   ttl 1h · 54m left')
   expect(row(40)).toBe('☀️ 98%   ctx 12%   54m left')
   expect(row(10)).toBe('☀️ 98%   ctx 12%   54m left')
@@ -135,5 +165,5 @@ test('emoji take two cells', () => {
 test('the TTL closes the row', () => {
   const turn = { read: 90, written: 5, uncached: 5 }
 
-  expect(text(describe(turn, turn, null, [{ text: 'ttl 1h' }]) ?? [])).toBe('☀️ cache █████████░ 90% · session 90%   ttl 1h')
+  expect(text(describe(turn, turn, null, [{ text: 'ttl 1h' }]))).toBe('☀️ cache █████████░ 90% · turn 90%   ttl 1h')
 })
