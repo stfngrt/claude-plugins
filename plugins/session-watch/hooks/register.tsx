@@ -449,6 +449,8 @@ export const register: Register = on => {
       if (shown.length === 0) return null
       const max = Math.max(1, ...shown.map(x => x.context))
       const firstIndex = t.requests - shown.length + 1
+      // Half the sidebar's bar width, every bar padded to it, so the figures after it line up in columns.
+      const growthW = Math.max(6, Math.round(barW / 2))
       return (
         <Box key={`g-${t.id}`} flexDirection="column">
           <Text dimColor wrap="truncate-end">
@@ -457,16 +459,22 @@ export const register: Register = on => {
           {shown.map((x, k) => {
             const prev = k > 0 ? shown[k - 1] : t.samples[t.samples.length - shown.length - 1]
             const delta = prev ? x.context - prev.context : null
+            const parts = tokenBar(x, max, growthW)
+            const used = parts.reduce((a, p) => a + p.text.length, 0)
+            const figures = [
+              tokensText(x.context).padStart(5),
+              (delta !== null ? `${delta >= 0 ? '+' : '−'}${tokensText(Math.abs(delta))}` : '').padStart(6),
+              `${Math.round((x.context ? x.read / x.context : 0) * 100)}%`.padStart(5),
+              (x.ms ? secondsText(x.ms) : '').padStart(6),
+            ].join('')
             return (
               <Text key={`g-${t.id}-${k}`} wrap="truncate-end">
                 <Text dimColor>{`#${firstIndex + k}`.padStart(4)} </Text>
-                {bar(tokenBar(x, max, barW), `g-${t.id}-${k}`)}
+                {bar(parts, `g-${t.id}-${k}`)}
                 <Text dimColor>
-                  {' '}
-                  {tokensText(x.context)}
-                  {delta !== null ? ` ${delta >= 0 ? '+' : '−'}${tokensText(Math.abs(delta))}` : ''} · {Math.round((x.context ? x.read / x.context : 0) * 100)}%
-                  {x.ms ? ` · ${secondsText(x.ms)}` : ''}
-                  {isRebuild(x) ? ' rebuilt' : ''}
+                  {' '.repeat(Math.max(0, growthW - used))}
+                  {figures}
+                  {isRebuild(x) ? '  rebuilt' : ''}
                 </Text>
               </Text>
             )
@@ -537,7 +545,7 @@ export const register: Register = on => {
 
         {heading('Cache growth per request')}
         <Text dimColor wrap="truncate-end">
-          input of each request: tokens, growth, share read from the cache
+          input of each request: tokens, growth, share read from the cache, time
         </Text>
         {threads.map(growth)}
         <Text> </Text>
